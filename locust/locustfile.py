@@ -1,9 +1,13 @@
 import logging
 import string
 import random
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
-from locust import HttpUser, task, run_single_user, constant_throughput
+from locust import HttpUser, task, run_single_user, constant_throughput, constant_pacing
+
+logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s', level=logging.INFO)
 
 
 @dataclass
@@ -73,9 +77,12 @@ def auth_data_as_dict(ad: AuthData):
     }
 
 
-def parse_csv():
+def parse_csv(csv_file: Path):
     result = HostData
-    with open("rhsso_auth.csv") as f:
+
+    logging.info(f"loading csv file {csv_file}")
+
+    with open(csv_file) as f:
         data = f.read()
         data = data.split(",")
         result.host = get_host(data[0])
@@ -85,16 +92,91 @@ def parse_csv():
     return result
 
 
+def parse_toml(toml_config: Path):
+    import tomllib
+    logging.info("loading toml configuration")
+    result = HostData
+    with open(toml_config) as f:
+        data = f.read()
+        data = tomllib.loads(data)
+        result.host = get_host(data['3scale']['url'])
+        result.token_url = get_token_url(data['auth']['url'], data['auth']['endpoint'])
+        auth = AuthData
+        auth.grant_type = data['auth']['grant_type']
+        auth.client_id = data['auth']['client_id']
+        auth.client_secret = data['auth']['client_secret']
+        auth.username = data['auth']['username']
+        auth.password = data['auth']['password']
+
+        result.auth_data = auth
+
+    return result
+
+
+def python_version_check():
+    if sys.version_info < (3, 11):
+        logging.info("recommended to use python 3.11 or above and the toml configuration file")
+    else:
+        logging.info("recommended to use the toml configuration file format for more features")
+
+
+def parse_json(json_auth: Path):
+    import json
+    logging.info("loading json configuration file")
+    result = HostData
+    with open(json_auth) as f:
+        data = f.read()
+        data = json.loads(data)
+        result.host = data['host']
+        result.token_url = get_token_url(data['sso'], data['endpoint'])
+        auth = AuthData
+        auth.grant_type = data['grant_type']
+        auth.client_id = data['client_id']
+        auth.client_secret = data['client_secret']
+        auth.username = data['username']
+        auth.password = data['password']
+
+        result.auth_data = auth
+
+    return result
+
+
+def load_data():
+
+    try:
+        toml_config = Path("config.toml")
+        if toml_config.is_file():
+            return parse_toml(toml_config)
+    except ModuleNotFoundError:
+        logging.warning("module tomllib not found falling back to older configuration formats")
+    python_version_check()
+
+    json_auth = Path("auth.json")
+    if json_auth.is_file():
+        return parse_json(json_auth)
+
+    auth_csv = Path("auth.csv")
+    if auth_csv.is_file():
+        return parse_csv(auth_csv)
+
+    auth_csv = Path("rhsso_auth.csv")
+    if auth_csv.is_file():
+        return parse_csv(auth_csv)
+
+    logging.error("no configuration file found, please create one")
+    exit(1)
+
+
 def generate_payload(payload_size):
     return ''.join([random.choice(string.ascii_letters) for _ in range(payload_size)])
 
 
-auth_data = parse_csv()
+auth_data = load_data()
 
 
 class RhoamUser(HttpUser):
     host = auth_data.host
-    wait_time = constant_throughput(20)
+    wait_time = constant_pacing(1)
     request_headers = ""
 
     payload5M = generate_payload(5 * 1024 * 1024)
@@ -114,40 +196,40 @@ class RhoamUser(HttpUser):
     @task(40)
     def get_data(self):
         random_id = random.randint(1, 99999)
-        self.client.get(f"/0/nothing/get/{random_id}", headers=self.request_headers, name="Get Data")
+        self.client.get(f"/nothing/{random_id}", headers=self.request_headers, name="Get Data")
 
     @task(11)
     def post_data_5kb(self):
         random_id = random.randint(1, 99999)
-        self.client.post(f"/0/nothing/{random_id}",
+        self.client.post(f"/nothing/{random_id}",
                          json={"data": f"{self.post_data_5kb}"},
                          headers=self.request_headers, name="Post Data 5kb")
 
     @task(11)
     def post_data_20kb(self):
         random_id = random.randint(1, 99999)
-        self.client.post(f"/0/nothing/{random_id}",
+        self.client.post(f"/nothing/{random_id}",
                          json={"data": f"{self.post_data_20kb}"},
                          headers=self.request_headers, name="Post Data 20kb")
 
     @task(13)
     def post_data_100kb(self):
         random_id = random.randint(1, 99999)
-        self.client.post(f"/0/nothing/{random_id}",
+        self.client.post(f"/nothing/{random_id}",
                          json={"data": f"{self.post_data_100kb}"},
                          headers=self.request_headers, name="Post Data 100kb")
 
     @task(4)
     def post_data_500kb(self):
         random_id = random.randint(1, 99999)
-        self.client.post(f"/0/nothing/{random_id}",
+        self.client.post(f"/nothing/{random_id}",
                          json={"data": f"{self.post_data_500kb}"},
                          headers=self.request_headers, name="Post Data 500kb")
 
     @task(2)
     def post_data_1mb(self):
         random_id = random.randint(1, 99999)
-        self.client.post(f"/0/nothing/{random_id}",
+        self.client.post(f"/nothing/{random_id}",
                          json={"data": f"{self.post_data_1mb}"},
                          headers=self.request_headers, name="Post Data 1mb")
 
